@@ -1,8 +1,6 @@
 package no.ohuen.fourthd;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.UnsupportedEncodingException;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
@@ -24,8 +22,13 @@ import no.ohuen.fourthd.exception.NotInitializedException;
 public class FOURD {
 
     private static final String DEFAULT_IMAGE_TYPE = "jpg";
+    private final int PAGE_SIZE = 100;
     private final int MAX_STRING_NUMBER = 255;
+    private final String OUTPUT_MODE = "release";
+
     private final boolean USE_BASE64 = false;
+    private final boolean STATEMENT_BASE64 = false;
+
     private final String PROTOCOL_VERSION = "13.0";
     private final int MAX_COL_TYPES_LENGHT = 4096;
     private final int VERBOSE = 1;
@@ -90,17 +93,9 @@ public class FOURD {
             this.connected = false;
             return false;
         }
-
-        BufferedReader in = new BufferedReader(new InputStreamReader(this.socket.getInputStream()));
-
-        String inputLine;
-        while ((inputLine = in.readLine()) != null) {
-            System.out.println(inputLine);
-        }
-
-        in.close();
-
-        socket.close();
+        this.connected = true;
+        this.errorCode = 0;
+        this.errorString = "";
 
         return true;
 
@@ -209,14 +204,14 @@ public class FOURD {
 
                         if (num < state.rowType.nbColumn) {
                             state.rowType.Column[num].type = typeFromString(column);
-                            state.rowType.Column[num].sType =  column;
+                            state.rowType.Column[num].sType = column;
                         } else {
                             if (VERBOSE == 1) {
                                 System.err.println(String.format("Error: There is more columns than Column-Count"));
                             }
                         }
                         num++;
-                        column = strtok_s(null, " ");
+                        column = column.split(" ")[0];
                     } while (column != null);
                 }
 
@@ -227,7 +222,7 @@ public class FOURD {
         }
         //get Column-Aliases-Base64
         {
-            String column_alias;
+            char[] column_alias;
             String alias = null;
             int num = 0;
             String col_start;
@@ -237,45 +232,51 @@ public class FOURD {
 
             //Figure out the length of our section. fun with pointers!
             //Start by getting a pointer to the start of the section label
-            col_start = strstr(header, section);
-            if (col_start != null) {
+            int indexOfSection = header.indexOf(section);
+            if (indexOfSection != -1) {
+                col_start = header.substring(indexOfSection);
                 //advance the pointer by the length of the section label
-                col_start += section.length();
+                //col_start += section.length();
                 //and find the first : (probably the next character)
-                col_start = strstr(col_start, ":");
+                int indexOfFirstColon = col_start.indexOf(":");
+//                col_start = strstr(col_start, ":");
 
-                if (col_start != null) {
+                if (indexOfFirstColon != -1) {
                     //after making sure we still have something to work with,
                     //advance to the next character after the ":", which is the
                     //start of our data
-                    col_start++;
+                    col_start = col_start.substring(indexOfFirstColon);
 
                     //now find the end. It should have a new line after it
-                    col_fin = strstr(col_start, "\n");
-                    if (col_fin != null) {
+                    //col_fin = strstr(col_start, "\n");
+                    int indexOfFirstLineBreak = col_start.indexOf("\n");
+                    if (indexOfFirstLineBreak != -1) {
                         //we have pointers to the start and end of our data. So how long is it?
                         //just subtract the pointers!
-                        base64_size = col_fin - col_start;
+                        //base64_size = col_fin - col_start;
+                        base64_size = indexOfFirstLineBreak - indexOfFirstColon;
                     }
                 }
             }
             //if we ran into any issues with the above manipulation, we just use the
             //default size of 2048 and pray it works :)
-            column_alias = calloc(sizeof(char), base64_size + 5); //I always like to give a few bytes wiggle
-
+            //column_alias = calloc(sizeof(char), base64_size + 5); //I always like to give a few bytes wiggle
+            column_alias = new char[(int) base64_size + 5];
             //char *context=null;
-            if (get(header, "Column-Aliases-Base64", column_alias, base64_size) == 0) {
+            if (get(header, "Column-Aliases-Base64", column_alias, (int) base64_size) == 0) {
                 /* delete the last espace char if exist */
-                if (column_alias[strlen(column_alias) - 1] == ' ') {
-                    column_alias[strlen(column_alias) - 1] = 0;
+                if (column_alias[column_alias.length - 1] == ' ') {
+                    //don't need null terminator in java
+                    //column_alias[column_alias.length - 1] = 0;
+                    //column_alias[column_alias.length - 1] = '\n';
                 }
 
                 if (VERBOSE == 1) {
-                    System.err.println(String.format("Column-Aliases-Base64 => '%s'\n", column_alias);
+                    System.err.println(String.format("Column-Aliases-Base64 => %s", new String(column_alias)));
                 }
 
                 _alias_str_replace(column_alias);
-                alias = strtok_s(column_alias, "\r");
+                alias = new String(column_alias).split("\r")[0];
                 if (alias != null) {
                     do {
                         if (VERBOSE == 1) {
@@ -285,7 +286,7 @@ public class FOURD {
                         if (num < state.rowType.nbColumn) {
                             /* erase [] */
                             if (alias.startsWith("[") && alias.endsWith("]")) {
-                                state.rowType.Column[num].sColumnName = alias.subSequence(1, alias.length()-1).toString();
+                                state.rowType.Column[num].sColumnName = alias.subSequence(1, alias.length() - 1).toString();
                             } else {
                                 state.rowType.Column[num].sColumnName = alias;
                             }
@@ -295,7 +296,7 @@ public class FOURD {
                             }
                         }
                         num++;
-                        alias = strtok_s(null, "\r");
+                        alias = alias.split("\r")[0];
                     } while (alias != null);
                 }
 
@@ -390,11 +391,87 @@ public class FOURD {
     }
 
     private long _get_status(StringBuilder header, int status, long errorCode, String errorString) {
-        throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
+//	char *loc=NULL,*fin=NULL,sStatus[50];
+//	*status=FOURD_ERROR;
+//	loc=strstr(header," ");
+//	if(loc==NULL) {
+//		return -1;
+//	}
+//	loc++;
+//	fin=strstr(loc,"\n");
+//	if(fin==NULL) {
+//		return -1;
+//	}
+//	if(*(fin-1)=='\r') {
+//#ifdef WIN32
+//		fin--;
+//#endif
+//	}
+//	_snprintf_s(sStatus,50,fin-loc,"%s",loc);
+//	status[fin-loc]=0;
+//	if(strcmp(sStatus,"OK")==0) {
+//		//it's ok
+//		*error_code=0;
+//		error_string[0]=0;
+//		*status=FOURD_OK;
+//		return 0;
+//	}
+//	else {
+//		//there is an error
+//		*status=FOURD_ERROR;
+//		{
+//			char error[50];
+//			get(header,"Error-Code",error,50);
+//			*error_code=atoi(error);
+//		}
+//		get(header,"Error-Description",error_string,ERROR_STRING_LENGTH);
+//		return *error_code;
+//	}
+//	return -1;
+        return 0L;
     }
 
-    private int get(String header, String columnCount, char[] column_count, int MAX_STRING_NUMBER) {
-        throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
+    private int get(String msg, String section, char[] value, int max_length) {
+        char[] loc = null;
+        char[] fin = null;
+        int index = msg.indexOf(section);
+//	loc=strstr(msg,section);
+        if (index == -1) {
+            return -1;
+        }
+//	loc+=strlen(section);
+//	loc=strstr(loc,":");
+//	if(loc==NULL) {
+//		return -1;
+//	}
+//	loc++;
+//	fin=strstr(loc,"\n");
+//	if(fin==NULL) {
+//		return -1;
+//	}
+//	if(*(fin-1)=='\r') {
+//#ifdef WIN32
+//		fin--;
+//#endif
+//	}
+//
+//	_snprintf_s(value,max_length,fin-loc,"%s",loc);
+//	value[fin-loc]=0;
+//
+//	if(strstr(section,"-Base64")!=NULL) {
+//		//decode la valeur
+//		unsigned char *value_decode=NULL;
+//		int len_dec=0;
+//		//value_decode=base64_decode(value,strlen(value),&len_dec);
+//		value_decode=b64_decode(value,strlen(value));
+//		len_dec=strlen(value_decode);
+//		value_decode[len_dec]=0;
+//		strncpy_s(value,max_length,(const char*)value_decode,(size_t)len_dec);
+//		value[len_dec]=0;
+//		Free(value_decode);
+//	}
+//	return 0;
+        return 0;
     }
 
     private FOURD_TYPE typeFromString(String type) {
@@ -477,10 +554,134 @@ public class FOURD {
     }
 
     private FOURD_RESULT_TYPE resultTypeFromString(String trim) {
-	if("Update-Count".equals(trim))
-		return FOURD_RESULT_TYPE.UPDATE_COUNT;
-	if("Result-Set".equals(trim))
-		return FOURD_RESULT_TYPE.RESULT_SET;
-	return FOURD_RESULT_TYPE.UNKNOW;
+        if ("Update-Count".equals(trim)) {
+            return FOURD_RESULT_TYPE.UPDATE_COUNT;
+        }
+        if ("Result-Set".equals(trim)) {
+            return FOURD_RESULT_TYPE.RESULT_SET;
+        }
+        return FOURD_RESULT_TYPE.UNKNOW;
+    }
+
+    private void _alias_str_replace(char[] list_alias) {
+//	char[] loc=list_alias;
+//	char[] locm= null;
+//	while((loc=strstr(loc,"] ["))!=NULL) {
+//		if((loc-list_alias)>1) {
+//			locm=loc;
+//			locm--;
+//			if(locm[0]!=']') {
+//				loc[1]='\r';
+//			}
+//			else {
+//				loc++;
+//			}
+//		}
+//		else {
+//			loc[1]='\r';
+//		}
+//	}
+    }
+
+    FOURD_RESULT fourd_query(String query) throws IOException {
+        FOURD_RESULT result = new FOURD_RESULT();
+        result.cnx = this;
+        this.idCnx++;
+
+        if (_query(this, this.idCnx, query, result, this.prefferedImageTypes, PAGE_SIZE) == 0) {
+            result.numRow = -1;
+            return result;
+        } else {
+            fourd_free_result(result);
+            return null;
+        }
+    }
+
+    private int _query(FOURD cnx, int id_cnx, String request, FOURD_RESULT result, String image_type, int res_size) throws IOException {
+        Communications c = new Communications();
+        String msg;
+        FOURD_RESULT res;
+
+        int len;
+
+        if (VERBOSE == 1) {
+            System.err.println("---Debug the _query");
+        }
+
+        _clear_atrr_cnx(cnx);
+
+        if (!_valid_query(cnx, request)) {
+            return 1;
+        }
+
+        if (result != null) {
+            res = result;
+        } else {
+            res = new FOURD_RESULT();
+        }
+
+        if (STATEMENT_BASE64) {
+
+            //request_b64=base64_encode(request,strlen(request),&len);
+            String request_b64 = Base64.getEncoder().encodeToString(request.getBytes("UTF-8"));
+            String format_str = "%d EXECUTE-STATEMENT\r\nSTATEMENT-BASE64:%s\r\nOutput-Mode:%s\r\nFIRST-PAGE-SIZE:%i\r\nPREFERRED-IMAGE-TYPES:%s\r\n\r\n";
+//            long buff_size = format_str.length() + request_b64.length() + 42; //add some extra for the additional arguments and a bit more for good measure.
+            //msg = new char[(int) buff_size];
+            msg = String.format(format_str, id_cnx, request_b64, OUTPUT_MODE, res_size, image_type);
+            //snprintf(msg, buff_size, format_str, id_cnx, request_b64, OUTPUT_MODE, res_size, image_type);
+
+        } else {
+            String format_str = "%d EXECUTE-STATEMENT\r\nSTATEMENT:%s\r\nOutput-Mode:%s\r\nFIRST-PAGE-SIZE:%i\r\nPREFERRED-IMAGE-TYPES:%s\r\n\r\n";
+            //long buff_size = format_str.length() + request.length() + 42; //add some extra for the additional arguments and a bit more for good measure.
+            //msg = new char[(int)buff_size];
+            //snprintf(msg, buff_size, format_str, id_cnx, request, OUTPUT_MODE, res_size, image_type);
+            msg = String.format(format_str, id_cnx, request, OUTPUT_MODE, res_size, image_type);
+        }
+        cnx.updatedRow = -1;
+        c.socket_send(cnx, msg);
+        //Free(msg);
+
+        if (receiv_check(cnx, res) != 0) {
+            return 1;
+        }
+
+        switch (res.resultType) {
+            case UPDATE_COUNT:
+                //get Update-count: Nb row updated
+                cnx.updatedRow = -1;
+                socket_receiv_update_count(cnx, res);
+                _free_data_result(res);
+                break;
+            case RESULT_SET:
+                //get data
+                socket_receiv_data(cnx, res);
+                cnx.updatedRow = -1;
+                if (result == null) {
+                    _free_data_result(res);
+                }
+                break;
+            default:
+                if (VERBOSE == 1) {
+                    System.err.println("Error: Result-Type not supported in query");
+                }
+        }
+        if (result == null) {
+            //Free(res);
+            //noop don't need to deallocate in Java
+        }
+
+        if (VERBOSE == 1) {
+            System.out.println("---End of _query\n");
+        }
+
+        return 0;
+    }
+
+    private void fourd_free_result(FOURD_RESULT result) {
+        throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
+    }
+
+    private boolean _valid_query(FOURD cnx, String request) {
+        throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
     }
 }
