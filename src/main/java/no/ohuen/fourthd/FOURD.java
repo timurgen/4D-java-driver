@@ -2,6 +2,7 @@ package no.ohuen.fourthd;
 
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
+import java.nio.charset.Charset;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
 import java.security.cert.X509Certificate;
@@ -24,13 +25,16 @@ public class FOURD {
     private static final String DEFAULT_IMAGE_TYPE = "jpg";
     private final int PAGE_SIZE = 100;
     private final int MAX_STRING_NUMBER = 255;
-    private final String OUTPUT_MODE = "release";
+    private final String OUTPUT_MODE = "RELEASE";
+    private final int FOURD_OK = 0;
+    private final int FOURD_ERROR = 1;
 
     private final boolean USE_BASE64 = false;
     private final boolean STATEMENT_BASE64 = false;
 
-    private final String PROTOCOL_VERSION = "13.0";
+    private final String PROTOCOL_VERSION = "0.1a";
     private final int MAX_COL_TYPES_LENGHT = 4096;
+    private final int ERROR_STRING_LENGTH = 2048;
     private final int VERBOSE = 1;
 
     SSLSocket socket;
@@ -45,6 +49,7 @@ public class FOURD {
     String errorString;
     String prefferedImageTypes = DEFAULT_IMAGE_TYPE;
     int timeout;
+    String session_id;
 
     long updatedRow;
 
@@ -112,15 +117,27 @@ public class FOURD {
             try {
                 String b64User = Base64.getEncoder().encodeToString(user.getBytes("UTF-8"));
                 String b64Password = Base64.getEncoder().encodeToString(password.getBytes("UTF-8"));
-                loginStr = String.format("%d LOGIN \r\nUSER-NAME-BASE64:%s\r\nUSER-PASSWORD-BASE64:%s\r\nPREFERRED-IMAGE-TYPES:%s\r\nREPLY-WITH-BASE64-TEXT:Y\r\nPROTOCOL-VERSION:%s\r\n\r\n", this.idCnx, b64User, b64Password, this.prefferedImageTypes, PROTOCOL_VERSION);
+                loginStr = String.format("%03d LOGIN \r\n"
+                        + "USER-NAME-BASE64:%s\r\n"
+                        + "USER-PASSWORD-BASE64:%s\r\n"
+                        + "PREFERRED-IMAGE-TYPES:%s\r\n"
+                        + "REPLY-WITH-BASE64-TEXT:Y\r\n"
+                        + "PROTOCOL-VERSION:%s\r\n\r\n", this.idCnx, b64User, b64Password, this.prefferedImageTypes, PROTOCOL_VERSION);
             } catch (UnsupportedEncodingException ex) {
                 Logger.getLogger(FOURD.class.getName()).log(Level.SEVERE, null, ex);
                 return 1;
             }
         } else {
-            loginStr = String.format("%d LOGIN \r\nUSER-NAME:%s\r\nUSER-PASSWORD:%s\r\nPREFERRED-IMAGE-TYPES:%s\r\nREPLY-WITH-BASE64-TEXT:Y\r\nPROTOCOL-VERSION:%s\r\n\r\n", this.idCnx, user, password, this.prefferedImageTypes, PROTOCOL_VERSION);
+            loginStr = String.format("%03d LOGIN \r\n"
+                    + "USER-NAME:%s\r\n"
+                    + "USER-PASSWORD:%s\r\n"
+                    + "PREFERRED-IMAGE-TYPES:%s\r\n"
+                    + "REPLY-WITH-BASE64-TEXT:Y\r\n"
+                    + "PROTOCOL-VERSION:%s\r\n\r\n", this.idCnx, user, password, this.prefferedImageTypes, PROTOCOL_VERSION);
         }
-
+        if (VERBOSE == 1) {
+            System.out.println("Send:\r\n" + loginStr);
+        }
         Communications c = new Communications();
         c.socket_send(cnx, loginStr);
 
@@ -172,9 +189,9 @@ public class FOURD {
         //The header is ok-header
         //get Column-Count
         {
-            char[] column_count = new char[MAX_STRING_NUMBER];
-            if (get(header, "Column-Count", column_count, MAX_STRING_NUMBER) == 0) {
-                state.rowType.nbColumn = (int) Integer.valueOf(new String(column_count));
+            String columnCount;
+            if ((columnCount = get(header, "Column-Count")) != null) {
+                state.rowType.nbColumn = (int) Integer.valueOf(columnCount);
                 //memory allocate for column name and column type
                 state.rowType.Column = new FOURD_COLUMN[state.rowType.nbColumn];
 
@@ -183,18 +200,26 @@ public class FOURD {
                 }
             }
         }
+        //contains SESSION-ID
+
+        {
+            String sessionId;
+            if ((sessionId = get(header, "Session-ID")) != null) {
+                this.session_id = sessionId;
+            }
+        }
         //get Column-Types
         {
-            char[] column_type = new char[MAX_COL_TYPES_LENGHT];
-            String column = null;
+            String columnTypes;
+            String column;
             int num = 0;
-            if (get(header, "Column-Types", column_type, MAX_COL_TYPES_LENGHT) == 0) {
+            if ((columnTypes = get(header, "Column-Types")) != null) {
 
                 if (VERBOSE == 1) {
-                    System.err.println(String.format("Column-Types => %s", new String(column_type)));
+                    System.err.println(String.format("Column-Types => %s", columnTypes));
                 }
 
-                column = new String(column_type).split(" ")[0];
+                column = columnTypes.split(" ")[0];
                 if (column.length() != 0) {
                     do {
 
@@ -261,22 +286,23 @@ public class FOURD {
             //if we ran into any issues with the above manipulation, we just use the
             //default size of 2048 and pray it works :)
             //column_alias = calloc(sizeof(char), base64_size + 5); //I always like to give a few bytes wiggle
-            column_alias = new char[(int) base64_size + 5];
+            //column_alias = new char[(int) base64_size + 5];
+            String columnAlias;
             //char *context=null;
-            if (get(header, "Column-Aliases-Base64", column_alias, (int) base64_size) == 0) {
+            if ((columnAlias = get(header, "Column-Aliases-Base64")) != null) {
                 /* delete the last espace char if exist */
-                if (column_alias[column_alias.length - 1] == ' ') {
+                if (columnAlias.endsWith(" ")) {
                     //don't need null terminator in java
                     //column_alias[column_alias.length - 1] = 0;
                     //column_alias[column_alias.length - 1] = '\n';
                 }
 
                 if (VERBOSE == 1) {
-                    System.err.println(String.format("Column-Aliases-Base64 => %s", new String(column_alias)));
+                    System.err.println(String.format("Column-Aliases-Base64 => %s", columnAlias));
                 }
 
-                _alias_str_replace(column_alias);
-                alias = new String(column_alias).split("\r")[0];
+                //_alias_str_replace(column_alias);
+                alias = columnAlias.split("\r\n")[0];
                 if (alias != null) {
                     do {
                         if (VERBOSE == 1) {
@@ -307,9 +333,9 @@ public class FOURD {
         }
         //get Row-Count
         {
-            char[] row_count = new char[MAX_STRING_NUMBER];
-            if (get(header, "Row-Count", row_count, MAX_STRING_NUMBER) == 0) {
-                state.rowCount = (int) Integer.valueOf(new String(row_count));
+            String rowCount;
+            if ((rowCount = get(header, "Row-Count")) != null) {
+                state.rowCount = (int) Integer.valueOf(rowCount);
 
                 if (VERBOSE == 1) {
                     System.err.println(String.format("Row-Count:%d", state.rowCount));
@@ -318,13 +344,13 @@ public class FOURD {
         }
         //get Row-Count-Sent
         {
-            char[] row_count = new char[MAX_STRING_NUMBER];
-            if (get(header, "Row-Count-Sent", row_count, MAX_STRING_NUMBER) == 0) {
+            String rowCount;
+            if ((rowCount = get(header, "Row-Count-Sent")) != null) {
 
                 if (VERBOSE == 1) {
-                    System.err.println(String.format("Row-Count-Sent:\"%s\" <=lut\n", new String(row_count)));
+                    System.err.println(String.format("Row-Count-Sent:\"%s\" <=lut\n", rowCount));
                 }
-                state.rowCountSent = (int) Integer.valueOf(new String(row_count));
+                state.rowCountSent = (int) Integer.valueOf(rowCount);
 
                 if (VERBOSE == 1) {
                     System.err.println(String.format("Row-Count-Sent:%d\n", state.rowCountSent));
@@ -333,9 +359,9 @@ public class FOURD {
         }
         //get Statement-ID
         {
-            char[] statement_id = new char[MAX_STRING_NUMBER];
-            if (get(header, "Statement-ID", statement_id, MAX_STRING_NUMBER) == 0) {
-                state.id_statement = Integer.valueOf(new String(statement_id));
+            String statementId;
+            if ((statementId = get(header, "Statement-ID")) != null) {
+                state.id_statement = Integer.valueOf(statementId);
 
                 if (VERBOSE == 1) {
                     System.err.println(String.format("Statement-ID:%d\n", state.id_statement));
@@ -344,13 +370,12 @@ public class FOURD {
         }
         //Column-Updateability
         {
-            char[] updateability = new char[MAX_COL_TYPES_LENGHT];
-            //state->updateability=1;
-            if (get(header, "Column-Updateability", updateability, MAX_COL_TYPES_LENGHT) == 0) {
-                state.updateability = new String(updateability).contains("Y");
+            String updateability;
+            if ((updateability = get(header, "Column-Updateability")) != null) {
+                state.updateability = updateability.contains("Y");
 
                 if (VERBOSE == 1) {
-                    System.err.println(String.format("Column-Updateability:%s", new String(updateability)));
+                    System.err.println(String.format("Column-Updateability:%s", updateability));
                     System.err.println(String.format("Column-Updateability:%s", state.updateability));
                 }
             }
@@ -358,20 +383,21 @@ public class FOURD {
         //get Result-Type
         {
             char[] result_type = new char[MAX_COL_TYPES_LENGHT];
-            if (get(header, "Result-Type", result_type, MAX_COL_TYPES_LENGHT) == 0) {
+            String resultType;
+            if ((resultType = get(header, "Result-Type")) != null) {
 
                 //if Result-Type containt more than 1 Result-type => multirequete => not supproted by this driver
-                if (new String(result_type).trim().contains(" ")) {
+                if (resultType.trim().contains(" ")) {
                     //multiquery not supported by this driver
 
                     if (VERBOSE == 1) {
-                        System.err.println(String.format("Result-Type:%s", new String(result_type)));
+                        System.err.println(String.format("Result-Type:%s", resultType));
                         System.err.println(String.format("Error: Multiquery not supported"));
                     }
 
                     return 1;
                 }
-                state.resultType = resultTypeFromString(new String(result_type).trim());
+                state.resultType = resultTypeFromString(resultType.trim());
                 switch (state.resultType) {
                     case UPDATE_COUNT:
                         break;
@@ -390,88 +416,48 @@ public class FOURD {
 
     }
 
-    private long _get_status(StringBuilder header, int status, long errorCode, String errorString) {
-//	char *loc=NULL,*fin=NULL,sStatus[50];
-//	*status=FOURD_ERROR;
-//	loc=strstr(header," ");
-//	if(loc==NULL) {
-//		return -1;
-//	}
-//	loc++;
-//	fin=strstr(loc,"\n");
-//	if(fin==NULL) {
-//		return -1;
-//	}
-//	if(*(fin-1)=='\r') {
-//#ifdef WIN32
-//		fin--;
-//#endif
-//	}
-//	_snprintf_s(sStatus,50,fin-loc,"%s",loc);
-//	status[fin-loc]=0;
-//	if(strcmp(sStatus,"OK")==0) {
-//		//it's ok
-//		*error_code=0;
-//		error_string[0]=0;
-//		*status=FOURD_OK;
-//		return 0;
-//	}
-//	else {
-//		//there is an error
-//		*status=FOURD_ERROR;
-//		{
-//			char error[50];
-//			get(header,"Error-Code",error,50);
-//			*error_code=atoi(error);
-//		}
-//		get(header,"Error-Description",error_string,ERROR_STRING_LENGTH);
-//		return *error_code;
-//	}
-//	return -1;
-        return 0L;
-    }
+    private long _get_status(StringBuilder header, Integer status, Long errorCode, String errorString) {
+        char[] eStatus = new char[50];
 
-    private int get(String msg, String section, char[] value, int max_length) {
-        char[] loc = null;
-        char[] fin = null;
-        int index = msg.indexOf(section);
-//	loc=strstr(msg,section);
-        if (index == -1) {
+        status = FOURD_ERROR;
+
+        if (!header.toString().contains(" ")) {
+            return -1L;
+        }
+
+        if (!header.toString().contains("\n")) {
             return -1;
         }
-//	loc+=strlen(section);
-//	loc=strstr(loc,":");
-//	if(loc==NULL) {
-//		return -1;
-//	}
-//	loc++;
-//	fin=strstr(loc,"\n");
-//	if(fin==NULL) {
-//		return -1;
-//	}
-//	if(*(fin-1)=='\r') {
-//#ifdef WIN32
-//		fin--;
-//#endif
-//	}
-//
-//	_snprintf_s(value,max_length,fin-loc,"%s",loc);
-//	value[fin-loc]=0;
-//
-//	if(strstr(section,"-Base64")!=NULL) {
-//		//decode la valeur
-//		unsigned char *value_decode=NULL;
-//		int len_dec=0;
-//		//value_decode=base64_decode(value,strlen(value),&len_dec);
-//		value_decode=b64_decode(value,strlen(value));
-//		len_dec=strlen(value_decode);
-//		value_decode[len_dec]=0;
-//		strncpy_s(value,max_length,(const char*)value_decode,(size_t)len_dec);
-//		value[len_dec]=0;
-//		Free(value_decode);
-//	}
-//	return 0;
-        return 0;
+        String statusStr = header.toString().split("\r\n")[0];
+
+        if (statusStr.contains("OK")) {
+            errorCode = 0L;
+            errorString = null;
+            status = FOURD_OK;
+            return 0L;
+        } else {
+            status = FOURD_ERROR;
+            String errorCodeStr = get(header.toString(), "Error-Code");
+            errorCode = Long.valueOf(errorCodeStr);
+            errorString = get(header.toString(), "Error-Description");
+            return errorCode;
+        }
+    }
+
+    private String get(String msg, String section) {
+        if (!msg.contains(section)) {
+            return null;
+        }
+        if (!msg.contains(":")) {
+            return null;
+        }
+
+        String msgValue = msg.substring(msg.indexOf(section)).split(":")[1].split("\r\n")[0];
+
+        if (section.contains("-Base64")) {
+            return new String(Base64.getDecoder().decode(msgValue));
+        }
+        return msgValue;
     }
 
     private FOURD_TYPE typeFromString(String type) {
@@ -588,7 +574,7 @@ public class FOURD {
         result.cnx = this;
         this.idCnx++;
 
-        if (_query(this, this.idCnx, query, result, this.prefferedImageTypes, PAGE_SIZE) == 0) {
+        if (_query(this, 3, query, result, this.prefferedImageTypes, PAGE_SIZE) == 0) {
             result.numRow = -1;
             return result;
         } else {
@@ -601,8 +587,6 @@ public class FOURD {
         Communications c = new Communications();
         String msg;
         FOURD_RESULT res;
-
-        int len;
 
         if (VERBOSE == 1) {
             System.err.println("---Debug the _query");
@@ -622,24 +606,27 @@ public class FOURD {
 
         if (STATEMENT_BASE64) {
 
-            //request_b64=base64_encode(request,strlen(request),&len);
-            String request_b64 = Base64.getEncoder().encodeToString(request.getBytes("UTF-8"));
-            String format_str = "%d EXECUTE-STATEMENT\r\nSTATEMENT-BASE64:%s\r\nOutput-Mode:%s\r\nFIRST-PAGE-SIZE:%i\r\nPREFERRED-IMAGE-TYPES:%s\r\n\r\n";
-//            long buff_size = format_str.length() + request_b64.length() + 42; //add some extra for the additional arguments and a bit more for good measure.
-            //msg = new char[(int) buff_size];
+            String request_b64 = Base64.getEncoder().encodeToString(request.getBytes(Charset.defaultCharset()));
+            String format_str = "%03d EXECUTE-STATEMENT\r\n"
+                    + "STATEMENT-BASE64: %s\r\n"
+                    + "OUTPUT-MODE: %s\r\n"
+                    + "FIRST-PAGE-SIZE:%d\r\n"
+                    + "PREFERRED-IMAGE-TYPES:%s\r\n\r\n";
             msg = String.format(format_str, id_cnx, request_b64, OUTPUT_MODE, res_size, image_type);
-            //snprintf(msg, buff_size, format_str, id_cnx, request_b64, OUTPUT_MODE, res_size, image_type);
 
         } else {
-            String format_str = "%d EXECUTE-STATEMENT\r\nSTATEMENT:%s\r\nOutput-Mode:%s\r\nFIRST-PAGE-SIZE:%i\r\nPREFERRED-IMAGE-TYPES:%s\r\n\r\n";
-            //long buff_size = format_str.length() + request.length() + 42; //add some extra for the additional arguments and a bit more for good measure.
-            //msg = new char[(int)buff_size];
-            //snprintf(msg, buff_size, format_str, id_cnx, request, OUTPUT_MODE, res_size, image_type);
+            String format_str = "%03d EXECUTE-STATEMENT \r\n"
+                    + "STATEMENT : %s\r\n"
+                    + "Output-Mode:%s\r\n"
+                    + "FIRST-PAGE-SIZE:%d\r\n"
+                    + "PREFERRED-IMAGE-TYPES:%s\r\n\r\n";
             msg = String.format(format_str, id_cnx, request, OUTPUT_MODE, res_size, image_type);
         }
         cnx.updatedRow = -1;
+        if (VERBOSE == 1) {
+            System.out.println("Send:\r\n" + msg);
+        }
         c.socket_send(cnx, msg);
-        //Free(msg);
 
         if (receiv_check(cnx, res) != 0) {
             return 1;
@@ -648,17 +635,17 @@ public class FOURD {
         switch (res.resultType) {
             case UPDATE_COUNT:
                 //get Update-count: Nb row updated
-                cnx.updatedRow = -1;
-                socket_receiv_update_count(cnx, res);
-                _free_data_result(res);
+//                cnx.updatedRow = -1;
+//                socket_receiv_update_count(cnx, res);
+//                _free_data_result(res);
                 break;
             case RESULT_SET:
                 //get data
-                socket_receiv_data(cnx, res);
-                cnx.updatedRow = -1;
-                if (result == null) {
-                    _free_data_result(res);
-                }
+//                socket_receiv_data(cnx, res);
+//                cnx.updatedRow = -1;
+//                if (result == null) {
+//                    _free_data_result(res);
+//                }
                 break;
             default:
                 if (VERBOSE == 1) {
@@ -678,10 +665,155 @@ public class FOURD {
     }
 
     private void fourd_free_result(FOURD_RESULT result) {
-        throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
+        //throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
     }
 
     private boolean _valid_query(FOURD cnx, String request) {
-        throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
+        if (_is_multi_query(request)) {
+            cnx.errorCode = -5001;
+            cnx.errorString = "MultiQuery not supported";
+            return false;
+        }
+        return true;
+    }
+
+    private boolean _is_multi_query(String _request) {
+        int i = 0;
+        long len;
+        boolean inCol = false;
+        boolean inStr = false;
+        int finFirst = 0;
+        char car = 0;
+        if (_request == null) {
+            return false;
+        }
+        len = _request.length();
+        char[] request = _request.toCharArray();
+        if (len < 1) {
+            return false;
+        }
+        for (i = 0; i < len; i++) {
+
+            car = request[i];
+            switch (car) {
+                case '[':
+                    /* start of 4D object name */
+                    if (!inStr) {
+                        if (!inCol) {
+                            /* printf("["); */
+                            inCol = true;
+                        } else {
+                            /* printf("_"); */
+                        }
+                    } else {
+                        /* printf("s"); */
+                    }
+                    break;
+                case ']':
+                    if (inStr) {
+                        /* printf("s"); */
+                    } else if (inCol) {
+                        inCol = false;
+                        /* printf("]"); */
+                    } else {
+                        if (i > 1) {
+                            /* check the previous charactere */
+                            if (request[i - 1] == ']') {
+                                /* not end of colomn name */
+                                inCol = true;
+                                /* printf("-"); */
+                            } else {
+                                inCol = false;
+                                /* printf("]"); */
+                            }
+                        } else {
+                            /* printf("_");*/
+                        }
+                    }
+
+                    break;
+                case '\'':
+                    if (!inCol) {
+                        /* printf("'");*/
+                        if (inStr == false) {
+                            inStr = true;
+                        } else {
+                            inStr = false;
+                        }
+                    } else {
+                        /* printf("c"); */
+                    }
+                    break;
+                case ';':
+                    /* end of query */
+                    if (!inCol && !inStr) {
+                        finFirst = 1;
+                        /* printf(";");*/
+                    } else {
+                        /*printf("_");*/
+                    }
+                    break;
+                default:
+                    if (inCol) {
+                        /* printf("C"); */
+                    } else if (inStr) {
+                        /* printf("S"); */
+                    } else if (car == ' ') {
+                        /*printf(" ");*/
+                    } else {
+                        if (finFirst == 1) {
+                            /* printf("X"); */
+                            return true;
+                        } else {
+                            /* printf("*"); */
+                        }
+                    }
+                    break;
+            }
+
+        }
+        return false;
+    }
+
+    int fourd_close() throws IOException {
+        if (dblogout(this, 4) != 0) {
+            //return 1;
+        }
+        if (quit(this, 5) != 0) {
+            //return 1;
+        }
+        this.socket.close();
+        return 0;
+    }
+
+    private int dblogout(FOURD cnx, int i) throws IOException {
+        FOURD_RESULT state = new FOURD_RESULT();
+        _clear_atrr_cnx(cnx);
+        String msg = String.format("%03d LOGOUT\r\n\r\n", i);
+        if (VERBOSE == 1) {
+            System.out.println("Send:\r\n" + msg);
+        }
+        Communications c = new Communications();
+        c.socket_send(cnx, msg);
+        if (receiv_check(cnx, state) != 0) {
+            return 1;
+        }
+        return 0;
+
+    }
+
+    private int quit(FOURD cnx, int i) throws IOException {
+        FOURD_RESULT state = new FOURD_RESULT();
+        _clear_atrr_cnx(cnx);
+        String msg = String.format("%03d QUIT\r\n\r\n", i);
+        if (VERBOSE == 1) {
+            System.out.println("Send:\r\n" + msg);
+        }
+        Communications c = new Communications();
+        c.socket_send(cnx, msg);
+        if (receiv_check(cnx, state) != 0) {
+            return 1;
+        }
+        return 0;
     }
 }
